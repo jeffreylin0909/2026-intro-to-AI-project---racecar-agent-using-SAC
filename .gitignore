@@ -8,3 +8,6 @@ v3/sac_car_buffer.pkl
 v3/sac_car_checkpoint.pth
 v4/sac_car_buffer.pkl
 v4/sac_car_checkpoint.pth
+
+# by RimWw
+.venv/
