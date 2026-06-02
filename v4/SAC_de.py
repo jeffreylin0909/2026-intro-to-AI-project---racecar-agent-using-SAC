@@ -77,7 +77,6 @@ class SACActor(nn.Module):
         x_t=dist.rsample() 
         action_tanh=torch.tanh(x_t)
         
-        #計算Log Prob和進行tanh 修正
         log_prob=dist.log_prob(x_t) - torch.log(1 - action_tanh.pow(2) + 1e-6)
         
         
@@ -85,7 +84,6 @@ class SACActor(nn.Module):
         gas_brake=(action_tanh[:, 1:] + 1.0)/2.0
         action=torch.cat([steer, gas_brake], dim=1)
         
-        #針對Gas/Brake維度進行縮放修正 
         correction=torch.zeros_like(log_prob)
         correction[:, 1:]=torch.log(torch.tensor(2.0))
         log_prob += correction
@@ -228,8 +226,8 @@ class SumTree:
 class PrioritizedReplayBuffer:
     def __init__(self, capacity, alpha=0.25, beta=0.4, beta_increment=1e-5):
         self.tree=SumTree(capacity)
-        self.alpha=alpha  #決定優先權的主導程度 (0:完全隨機, 1:完全靠 TD Error)
-        self.beta=beta    #修正重要性採樣偏誤的參數 (隨著訓練逐漸調整到 1.0)
+        self.alpha=alpha  
+        self.beta=beta    
         self.beta_increment=beta_increment
         self.epsilon= .01 
 
@@ -244,7 +242,6 @@ class PrioritizedReplayBuffer:
     def sample(self, batch_size):
         idx_batch, data_batch, weights=[], [], []
         
-        #在每個區段內均勻抽樣
         segment=self.tree.total_priority/batch_size
         self.beta=min(1.0, self.beta + self.beta_increment)
 
@@ -265,7 +262,7 @@ class PrioritizedReplayBuffer:
             idx, p, data=self.tree.get(s)
             
             sample_prob=p/self.tree.total_priority
-            w=(sample_prob*self.tree.n_entries) ** (-self.beta)
+            w=(sample_prob*self.tree.n_entries)**(-self.beta)
             weights.append(w/max_weight)    
             idx_batch.append(idx)
             data_batch.append(data)
@@ -289,7 +286,6 @@ class PrioritizedReplayBuffer:
 def preprocess(state_img, dashboard_vec, device):
     #0-1 normalisation for image
     img=torch.FloatTensor(state_img.copy()).permute(2, 0, 1).unsqueeze(0)/255.0
-    #建立一個與 dashboard_vec 同形狀的 scale 向量
     scales=torch.FloatTensor([100.0, 230.0, 230.0, 230.0, 230.0, 1.0, 1.0, 1.0]).to(device)
     dash=torch.FloatTensor(dashboard_vec).to(device) / scales
     dash=dash.unsqueeze(0) 
@@ -444,7 +440,7 @@ def evaluate_agent(agent, seed, trials):
         tile_hit=0
         
         for t in range(num_episode_step):
-            img_t, dash_t = preprocess(state, dashboard, device)
+            img_t, dash_t=preprocess(state, dashboard, device)
             with torch.no_grad():
                 action, x=agent.actor.sample(img_t, dash_t)
             action=action.cpu().numpy()[0]
@@ -531,7 +527,7 @@ while (True):
         #判斷飛出去
         on_grass=True
         for wheel in env.unwrapped.car.wheels:
-            if len(wheel.tiles) > 0:
+            if len(wheel.tiles)>0:
                 on_grass=False
                 break
         if on_grass:
@@ -546,8 +542,8 @@ while (True):
         total_steps+=1
         
         # 訓練模型
-        if len(buffer) >= min_buffer_size:
-            if (total_steps%1000 == 0):
+        if len(buffer)>=min_buffer_size:
+            if (total_steps%1000==0):
                 print(f"total_steps: {total_steps}")
     
                 now_mean, now_max, now_min=evaluate_agent(agent, SEED+100, 5)
@@ -571,11 +567,11 @@ while (True):
 
             agent.update_parameters(buffer, batch_size)
 
-        if (total_steps == num_total_steps):
+        if (total_steps==num_total_steps):
             break
 
         if done or truncated:
             break
 
-    if (total_steps == num_total_steps):
+    if (total_steps==num_total_steps):
         break
