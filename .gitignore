@@ -11,3 +11,4 @@ v4/sac_car_checkpoint.pth
 
 # by RimWw
 .venv/
+v4e/__pycache__/
