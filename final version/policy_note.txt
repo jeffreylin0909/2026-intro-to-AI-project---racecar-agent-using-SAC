@@ -1,0 +1,6 @@
+v0: vanilla environment
+v1: stuck-preventing, outside-preventing environment
+v2: stuck-preventing, outside-preventing environment add stuck and outside penalty
+v3: stuck-preventing, outside-preventing environment add stuck and outside penalty and speed bonus
+v4: v1 with PER
+v5: v1, with PER before best score exceed 200, switch to normal after
