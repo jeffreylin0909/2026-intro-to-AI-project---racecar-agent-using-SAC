@@ -334,8 +334,15 @@ class SACAgent:
         self.tau = 0.005
 
     def update_parameters(self, buffer, batch_size):
-        # Sample Batch
-        s_img, s_dash, a, r, ns_img, ns_dash, d, tree_idx, is_weights = buffer.sample(batch_size)        
+    
+        # Sample batch based on buffer type
+        is_per = isinstance(buffer, PrioritizedReplayBuffer)
+        if is_per:
+            s_img, s_dash, a, r, ns_img, ns_dash, d, tree_idx, is_weights = buffer.sample(batch_size)
+            weights = torch.FloatTensor(is_weights).unsqueeze(1).to(self.device)
+        else:
+            s_img, s_dash, a, r, ns_img, ns_dash, d = buffer.sample(batch_size)
+            weights = torch.ones((batch_size, 1)).to(self.device)        
         
         # Tensors setup
         s_img = torch.FloatTensor(s_img).permute(0, 3, 1, 2).to(self.device) / 255.0
@@ -344,7 +351,6 @@ class SACAgent:
         scales = torch.FloatTensor([100.0, 230.0, 230.0, 230.0, 230.0, 1.0, 1.0, 1.0]).to(self.device)
         s_dash, ns_dash = torch.FloatTensor(s_dash).to(self.device)/scales, torch.FloatTensor(ns_dash).to(self.device)/scales
         a, r, d = torch.FloatTensor(a).to(self.device), torch.FloatTensor(r).unsqueeze(1).to(self.device), torch.FloatTensor(d).unsqueeze(1).to(self.device)
-        weights = torch.FloatTensor(is_weights).unsqueeze(1).to(self.device) # 新增權重 Tensor
 
         with torch.no_grad():
             next_action, next_log_prob = self.actor.sample(ns_img, ns_dash)
@@ -445,46 +451,48 @@ def preprocess(state_img, dashboard_vec, device):
     
     return img.to(device), dash
 
-def save_ReplayBuffer(buffer, path):
+def save_buffer(buffer, path):
     with open(path, 'wb') as f:
-        pickle.dump(buffer.buffer, f)
-
-def save_PrioritizedReplayBuffer(buffer, path):
-    with open(path, 'wb') as f:
-        state = {
-            'tree': buffer.tree.tree,
-            'data': buffer.tree.data,
-            'write': buffer.tree.write,
-            'n_entries': buffer.tree.n_entries,
-            'alpha': buffer.alpha,
-            'beta': buffer.beta,
-            'beta_increment': buffer.beta_increment,
-            'epsilon': buffer.epsilon
-        }
+        if isinstance(buffer, PrioritizedReplayBuffer):
+            state = {
+                'type': 'PER',
+                'tree': buffer.tree.tree,
+                'data': buffer.tree.data,
+                'write': buffer.tree.write,
+                'n_entries': buffer.tree.n_entries,
+                'alpha': buffer.alpha,
+                'beta': buffer.beta,
+                'beta_increment': buffer.beta_increment,
+                'epsilon': buffer.epsilon
+            }
+        else:
+            state = {
+                'type': 'Standard',
+                'buffer': buffer.buffer
+            }
         pickle.dump(state, f)
 
-def load_ReplayBuffer(buffer, path):
-    if os.path.exists(path):
-        with open(path, 'rb') as f:
-            buffer.buffer = pickle.load(f)
-
-def load_PrioritizedReplayBuffer(buffer, path):
+def load_buffer(path, capacity):
     if os.path.exists(path):
         with open(path, 'rb') as f:
             state = pickle.load(f)
         
-        buffer.tree.tree = state['tree']
-        buffer.tree.data = state['data']
-        buffer.tree.write = state['write']
-        buffer.tree.n_entries = state['n_entries']
-        buffer.alpha = state.get('alpha', buffer.alpha)
-        buffer.beta = state.get('beta', buffer.beta)
-        buffer.beta_increment = state.get('beta_increment', buffer.beta_increment)
-        buffer.epsilon = state.get('epsilon', buffer.epsilon)
-        
-        return True
-    else:
-        return False
+        if state.get('type') == 'Standard':
+            buf = ReplayBuffer(capacity)
+            buf.buffer = state['buffer']
+            return buf
+        else:
+            buf = PrioritizedReplayBuffer(capacity)
+            buf.tree.tree = state['tree']
+            buf.tree.data = state['data']
+            buf.tree.write = state['write']
+            buf.tree.n_entries = state['n_entries']
+            buf.alpha = state.get('alpha', buf.alpha)
+            buf.beta = state.get('beta', buf.beta)
+            buf.beta_increment = state.get('beta_increment', buf.beta_increment)
+            buf.epsilon = state.get('epsilon', buf.epsilon)
+            return buf
+    return None
 
 def evaluate_agent(agent, seed, num_trials):
     
@@ -567,7 +575,7 @@ if __name__ == "__main__":
     
     # initialize checkpoint
     if (os.path.exists(checkpoint_path)):
-        load_PrioritizedReplayBuffer(buffer, buffer_path)
+        load_buffer(buffer, buffer_path)
         total_steps, now_score, best_score = agent.load_checkpoint(checkpoint_path)
         total_steps += 1
 
@@ -642,7 +650,22 @@ if __name__ == "__main__":
                     best_score = max(best_score, now_mean)
 
                     print(f"Total steps: {total_steps}, now_mean={now_mean:.1f}  max={now_max:.1f}  min={now_min:.1f}  best={best_score:.1f}")
-
+                    
+                    if best_score > 200 and isinstance(buffer, PrioritizedReplayBuffer):
+                    
+                        print(f"Best score exceed 200, transporting data from PrioritizedReplayBuffer to ReplayBuffer...")
+                        
+                        # transport data from PrioritizedReplayBuffer to ReplayBuffer
+                        new_buffer = ReplayBuffer(max_buffer_size)
+                        for i in range(buffer.tree.capacity):
+                            data = buffer.tree.data[i]
+                            if isinstance(data, tuple):
+                                new_buffer.push(*data)
+                                
+                        buffer = new_buffer
+                        
+                        print("transportation done! ")
+                    
                     mean_rewards.append(now_mean)
                     max_rewards.append(now_max)
                     min_rewards.append(now_min)
@@ -656,7 +679,7 @@ if __name__ == "__main__":
                     df.to_csv('training_curve.csv', index=False, encoding='utf-8-sig')
         
                     agent.save_checkpoint(checkpoint_path, total_steps, now_mean, best_score)
-                    save_PrioritizedReplayBuffer(buffer, buffer_path)
+                    save_buffer(buffer, buffer_path)
                     
                     if (now_mean==best_score):
                         print(f"New best model saved")

@@ -553,7 +553,7 @@ if __name__ == "__main__":
     total_steps = 0
     
     # initialize buffer and agent
-    buffer = PrioritizedReplayBuffer(max_buffer_size)
+    buffer = ReplayBuffer(max_buffer_size)
     agent = SACAgent(device)
     
     # about checkpoints
@@ -567,7 +567,7 @@ if __name__ == "__main__":
     
     # initialize checkpoint
     if (os.path.exists(checkpoint_path)):
-        load_PrioritizedReplayBuffer(buffer, buffer_path)
+        load_ReplayBuffer(buffer, buffer_path)
         total_steps, now_score, best_score = agent.load_checkpoint(checkpoint_path)
         total_steps += 1
 
@@ -591,30 +591,32 @@ if __name__ == "__main__":
         state = state[2:82]
         dashboard = np.zeros(8)
         episode_reward = 0
-        stay_neg = 0
-    
+        
         for t in range(num_episode_step):
             # 選擇動作
             img_t, dash_t = preprocess(state, dashboard, device)
             with torch.no_grad():
                 action, _ = agent.actor.sample(img_t, dash_t)
             action = action.cpu().numpy()[0]
-
+    
             # 執行動作
             next_state, reward, done, truncated, info = env.step(action)
             next_state = next_state[2:82]
             
             # 更新物理量 (Dashboard)
             car = env.unwrapped.car
-            next_dashboard = np.concatenate((np.array([np.linalg.norm(car.hull.linearVelocity)] + [w.omega for w in car.wheels]), action))
+            next_dashboard = np.concat((np.array([np.linalg.norm(car.hull.linearVelocity)] + [w.omega for w in car.wheels]), action))
+            
+            # 速度獎勵
+            reward += 0.1*next_dashboard[0]
             
             # 判斷卡死
             if (reward<0):
                 stay_neg += 1
             else:
                 stay_neg = 0
-
             if (stay_neg>500):
+                reward = -100
                 done = True
             
             # 判斷飛出去
@@ -624,7 +626,8 @@ if __name__ == "__main__":
                     on_grass = False
                     break
             if on_grass:
-                done = True
+              reward = -100
+              done = True
             
             # 存入 Buffer
             buffer.push(state, dashboard, action, reward, next_state, next_dashboard, done)
@@ -633,16 +636,16 @@ if __name__ == "__main__":
             episode_reward += reward
         
             total_steps += 1
-            
+        
             # 訓練模型
             if len(buffer) >= min_buffer_size:
-            
+                
                 if (total_steps%1000 == 0):
+                    print(f"total_steps: {total_steps}")
+        
                     now_mean, now_max, now_min = evaluate_agent(agent, SEED+100, 5)
                     best_score = max(best_score, now_mean)
-
-                    print(f"Total steps: {total_steps}, now_mean={now_mean:.1f}  max={now_max:.1f}  min={now_min:.1f}  best={best_score:.1f}")
-
+        
                     mean_rewards.append(now_mean)
                     max_rewards.append(now_max)
                     min_rewards.append(now_min)
@@ -653,20 +656,22 @@ if __name__ == "__main__":
                         'min': min_rewards
                     })
         
-                    df.to_csv('training_curve.csv', index=False, encoding='utf-8-sig')
+                    df.to_csv('training_cruve.csv', index=False, encoding='utf-8-sig')
         
                     agent.save_checkpoint(checkpoint_path, total_steps, now_mean, best_score)
-                    save_PrioritizedReplayBuffer(buffer, buffer_path)
+                    save_ReplayBuffer(buffer, buffer_path)
                     
                     if (now_mean==best_score):
-                        print(f"New best model saved")
                         os.system(f"cp {checkpoint_path} sac_car_best_model.pth")
-
+    
                 agent.update_parameters(buffer, batch_size)
-
-            if (total_steps == num_total_steps) or done or truncated:
+                
+            if (total_steps == num_total_steps):
                 break
-
+    
+            if done or truncated:
+                break
+    
         if (total_steps == num_total_steps):
-            print(f"Training complete: {total_steps} steps")
             break
+    
